@@ -19,25 +19,37 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import com.miguel.foldlauncher.data.WallpaperStore
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 @Composable
 fun WallpaperStudio(
     onBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    var selected by remember { mutableStateOf<List<Uri>>(emptyList()) }
+    val context = LocalContext.current
+
+    // Load saved wallpapers (live updates)
+    val savedUris by WallpaperStore.observe(context).collectAsState(initial = emptyList())
 
     val picker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments()
     ) { uris ->
-        // If user cancels, uris can be null → reset to empty list
-        selected = uris ?: emptyList()
+        val newList = uris ?: emptyList()
+        // Save selection to DataStore
+        // (run off the UI thread)
+        kotlinx.coroutines.MainScope().launch {
+            withContext(Dispatchers.IO) {
+                WallpaperStore.save(context, newList)
+            }
+        }
     }
 
     Column(
@@ -61,19 +73,17 @@ fun WallpaperStudio(
 
         Spacer(Modifier.height(12.dp))
 
-        Button(
-            onClick = { picker.launch(arrayOf("image/*", "video/*")) }
-        ) {
+        Button(onClick = { picker.launch(arrayOf("image/*", "video/*")) }) {
             Text("Select images/videos")
         }
 
         Spacer(Modifier.height(12.dp))
 
-        Text("Selected: ${selected.size}")
+        Text("Saved: ${savedUris.size}")
 
         Spacer(Modifier.height(12.dp))
 
-        if (selected.isEmpty()) {
+        if (savedUris.isEmpty()) {
             Text(
                 text = "No media selected yet.",
                 style = MaterialTheme.typography.bodyMedium
@@ -83,7 +93,7 @@ fun WallpaperStudio(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                items(selected) { uri ->
+                items(savedUris) { uri: Uri ->
                     Card(Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(12.dp)) {
                             Text(
