@@ -1,100 +1,116 @@
-package com.miguel.foldlauncher.wallpaper
+package com.miguel.foldlauncher.ui.wallpaper
 
-import android.app.WallpaperManager
-import android.graphics.BitmapFactory
-import android.service.wallpaper.WallpaperService
-import android.view.SurfaceHolder
+import android.content.Intent
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
 import com.miguel.foldlauncher.data.WallpaperStore
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-class RotatorWallpaperService : WallpaperService() {
+@Composable
+fun WallpaperStudio(
+    onBack: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
 
-    override fun onCreateEngine(): Engine = RotatorEngine()
+    val savedUris by WallpaperStore.observe(context).collectAsState(initial = emptyList())
 
-    private inner class RotatorEngine : Engine() {
+    val picker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris ->
+        if (uris == null) return@rememberLauncherForActivityResult
 
-        private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-        private var rotateJob: Job? = null
-
-        // Rotation interval (milliseconds)
-        private val intervalMs: Long = 30_000L
-
-        private var index = 0
-
-        override fun onCreate(surfaceHolder: SurfaceHolder) {
-            super.onCreate(surfaceHolder)
-        }
-
-        override fun onVisibilityChanged(visible: Boolean) {
-            super.onVisibilityChanged(visible)
-            if (visible) startRotating() else stopRotating()
-        }
-
-        override fun onDestroy() {
-            stopRotating()
-            scope.cancel()
-            super.onDestroy()
-        }
-
-        private fun startRotating() {
-            if (rotateJob?.isActive == true) return
-
-            rotateJob = scope.launch {
-                // Apply immediately once
-                applyNextWallpaper()
-
-                // Then rotate
-                while (isActive) {
-                    delay(intervalMs)
-                    applyNextWallpaper()
-                }
-            }
-        }
-
-        private fun stopRotating() {
-            rotateJob?.cancel()
-            rotateJob = null
-        }
-
-        private suspend fun applyNextWallpaper() {
-            val ctx = applicationContext
-
-            // Get the saved URIs from DataStore-backed flow
-            val uris = try {
-                withContext(Dispatchers.IO) {
-                    WallpaperStore.observe(ctx).first()
-                }
-            } catch (_: Throwable) {
-                emptyList()
-            }
-
-            if (uris.isEmpty()) return
-
-            // Keep index in range even if list changes
-            if (index >= uris.size) index = 0
-            val uri = uris[index]
-            index = (index + 1) % uris.size
-
+        // Persist read permission so the live wallpaper can access URIs later
+        uris.forEach { uri ->
             try {
-                withContext(Dispatchers.IO) {
-                    val wm = WallpaperManager.getInstance(ctx)
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            } catch (_: SecurityException) {
+                // Some providers don't allow persistable permission. That's okay.
+            } catch (_: Exception) {
+                // Defensive: ignore any odd provider behavior.
+            }
+        }
 
-                    ctx.contentResolver.openInputStream(uri)?.use { input ->
-                        val bitmap = BitmapFactory.decodeStream(input) ?: return@withContext
-                        wm.setBitmap(bitmap)
+        scope.launch {
+            withContext(Dispatchers.IO) {
+                WallpaperStore.save(context, uris)
+            }
+        }
+    }
+
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                text = "Wallpaper Studio",
+                style = MaterialTheme.typography.headlineSmall
+            )
+            TextButton(onClick = onBack) { Text("Back") }
+        }
+
+        Spacer(Modifier.height(12.dp))
+
+        Button(onClick = { picker.launch(arrayOf("image/*", "video/*")) }) {
+            Text("Select images/videos")
+        }
+
+        Spacer(Modifier.height(12.dp))
+
+        Text("Saved: ${savedUris.size}")
+        Spacer(Modifier.height(12.dp))
+
+        if (savedUris.isEmpty()) {
+            Text(
+                text = "No media selected yet.",
+                style = MaterialTheme.typography.bodyMedium
+            )
+        } else {
+            LazyColumn(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(savedUris) { uri: Uri ->
+                    Card(Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(12.dp)) {
+                            Text(uri.toString(), style = MaterialTheme.typography.bodySmall)
+                        }
                     }
                 }
-            } catch (_: Throwable) {
-                // If a URI becomes invalid or permission is missing, skip quietly.
             }
         }
     }
