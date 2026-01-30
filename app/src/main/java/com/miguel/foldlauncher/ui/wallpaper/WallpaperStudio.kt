@@ -14,21 +14,18 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 
 class RotatorWallpaperService : WallpaperService() {
 
-    override fun onCreateEngine(): Engine {
-        return RotatorEngine()
-    }
+    override fun onCreateEngine(): Engine = RotatorEngine()
 
     private inner class RotatorEngine : Engine() {
 
         private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
         private var rotateJob: Job? = null
 
-        // Change this to whatever rotation interval you want (milliseconds)
+        // Rotation interval (milliseconds)
         private val intervalMs: Long = 30_000L
 
         private var index = 0
@@ -52,10 +49,10 @@ class RotatorWallpaperService : WallpaperService() {
             if (rotateJob?.isActive == true) return
 
             rotateJob = scope.launch {
-                // Immediate apply once when it becomes visible
+                // Apply immediately once
                 applyNextWallpaper()
 
-                // Then keep rotating
+                // Then rotate
                 while (isActive) {
                     delay(intervalMs)
                     applyNextWallpaper()
@@ -71,10 +68,10 @@ class RotatorWallpaperService : WallpaperService() {
         private suspend fun applyNextWallpaper() {
             val ctx = applicationContext
 
-            // Grab the latest saved list from the DataStore-backed flow
+            // Get the saved URIs from DataStore-backed flow
             val uris = try {
                 withContext(Dispatchers.IO) {
-                    runBlocking { WallpaperStore.observe(ctx).first() }
+                    WallpaperStore.observe(ctx).first()
                 }
             } catch (_: Throwable) {
                 emptyList()
@@ -82,7 +79,7 @@ class RotatorWallpaperService : WallpaperService() {
 
             if (uris.isEmpty()) return
 
-            // Keep index in range even if list size changes
+            // Keep index in range even if list changes
             if (index >= uris.size) index = 0
             val uri = uris[index]
             index = (index + 1) % uris.size
@@ -97,8 +94,7 @@ class RotatorWallpaperService : WallpaperService() {
                     }
                 }
             } catch (_: Throwable) {
-                // If a URI becomes invalid or permission is missing, we just skip quietly.
-                // (You can log here later if you want.)
+                // If a URI becomes invalid or permission is missing, skip quietly.
             }
         }
     }
