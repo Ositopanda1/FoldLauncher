@@ -1,110 +1,104 @@
-package com.miguel.foldlauncher.ui.wallpaper
+package com.miguel.foldlauncher.wallpaper
 
-import android.net.Uri
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.unit.dp
+import android.app.WallpaperManager
+import android.graphics.BitmapFactory
+import android.service.wallpaper.WallpaperService
+import android.view.SurfaceHolder
 import com.miguel.foldlauncher.data.WallpaperStore
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 
-@Composable
-fun WallpaperStudio(
-    onBack: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
+class RotatorWallpaperService : WallpaperService() {
 
-    // Load saved wallpapers (live updates)
-    val savedUris by WallpaperStore.observe(context).collectAsState(initial = emptyList())
-
-    val picker = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenMultipleDocuments()
-    ) { uris ->
-        val newList = uris ?: emptyList()
-
-        // Save selection to DataStore off the UI thread
-        scope.launch {
-            withContext(Dispatchers.IO) {
-                WallpaperStore.save(context, newList)
-            }
-        }
+    override fun onCreateEngine(): Engine {
+        return RotatorEngine()
     }
 
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .padding(16.dp)
-    ) {
-        // Top bar
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Text(
-                text = "Wallpaper Studio",
-                style = MaterialTheme.typography.headlineSmall
-            )
-            TextButton(onClick = onBack) {
-                Text("Back")
+    private inner class RotatorEngine : Engine() {
+
+        private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+        private var rotateJob: Job? = null
+
+        // Change this to whatever rotation interval you want (milliseconds)
+        private val intervalMs: Long = 30_000L
+
+        private var index = 0
+
+        override fun onCreate(surfaceHolder: SurfaceHolder) {
+            super.onCreate(surfaceHolder)
+        }
+
+        override fun onVisibilityChanged(visible: Boolean) {
+            super.onVisibilityChanged(visible)
+            if (visible) startRotating() else stopRotating()
+        }
+
+        override fun onDestroy() {
+            stopRotating()
+            scope.cancel()
+            super.onDestroy()
+        }
+
+        private fun startRotating() {
+            if (rotateJob?.isActive == true) return
+
+            rotateJob = scope.launch {
+                // Immediate apply once when it becomes visible
+                applyNextWallpaper()
+
+                // Then keep rotating
+                while (isActive) {
+                    delay(intervalMs)
+                    applyNextWallpaper()
+                }
             }
         }
 
-        Spacer(Modifier.height(12.dp))
-
-        Button(onClick = { picker.launch(arrayOf("image/*", "video/*")) }) {
-            Text("Select images/videos")
+        private fun stopRotating() {
+            rotateJob?.cancel()
+            rotateJob = null
         }
 
-        Spacer(Modifier.height(12.dp))
+        private suspend fun applyNextWallpaper() {
+            val ctx = applicationContext
 
-        Text("Saved: ${savedUris.size}")
+            // Grab the latest saved list from the DataStore-backed flow
+            val uris = try {
+                withContext(Dispatchers.IO) {
+                    runBlocking { WallpaperStore.observe(ctx).first() }
+                }
+            } catch (_: Throwable) {
+                emptyList()
+            }
 
-        Spacer(Modifier.height(12.dp))
+            if (uris.isEmpty()) return
 
-        if (savedUris.isEmpty()) {
-            Text(
-                text = "No media selected yet.",
-                style = MaterialTheme.typography.bodyMedium
-            )
-        } else {
-            LazyColumn(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                items(savedUris) { uri ->
-                    Card(Modifier.fillMaxWidth()) {
-                        Column(Modifier.padding(12.dp)) {
-                            Text(
-                                text = uri.toString(),
-                                style = MaterialTheme.typography.bodySmall
-                            )
-                        }
+            // Keep index in range even if list size changes
+            if (index >= uris.size) index = 0
+            val uri = uris[index]
+            index = (index + 1) % uris.size
+
+            try {
+                withContext(Dispatchers.IO) {
+                    val wm = WallpaperManager.getInstance(ctx)
+
+                    ctx.contentResolver.openInputStream(uri)?.use { input ->
+                        val bitmap = BitmapFactory.decodeStream(input) ?: return@withContext
+                        wm.setBitmap(bitmap)
                     }
                 }
+            } catch (_: Throwable) {
+                // If a URI becomes invalid or permission is missing, we just skip quietly.
+                // (You can log here later if you want.)
             }
         }
     }
