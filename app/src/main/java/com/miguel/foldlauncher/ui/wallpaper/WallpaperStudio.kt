@@ -13,6 +13,7 @@ import androidx.compose.ui.unit.dp
 
 @Composable
 fun WallpaperStudio(
+    onBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var selected by remember { mutableStateOf<List<Uri>>(emptyList()) }
@@ -28,10 +29,20 @@ fun WallpaperStudio(
             .fillMaxSize()
             .padding(16.dp)
     ) {
-        Text(
-            text = "Wallpaper Studio",
-            style = MaterialTheme.typography.headlineSmall
-        )
+
+        // 🔹 Top bar
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                text = "Wallpaper Studio",
+                style = MaterialTheme.typography.headlineSmall
+            )
+            TextButton(onClick = onBack) {
+                Text("Back")
+            }
+        }
 
         Spacer(Modifier.height(12.dp))
 
